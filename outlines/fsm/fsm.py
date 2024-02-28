@@ -1,3 +1,4 @@
+import functools
 from typing import TYPE_CHECKING, List, NewType, Protocol, Tuple
 
 import interegular
@@ -22,14 +23,11 @@ class FSM(Protocol):
         """Determine whether the current state of the FSM is a final state."""
         return state == self.final_state
 
-    def allowed_token_ids(self, state: FSMState) -> List[int]:
-        ...
+    def allowed_token_ids(self, state: FSMState) -> List[int]: ...
 
-    def next_state(self, state: FSMState, token_id: int) -> FSMState:
-        ...
+    def next_state(self, state: FSMState, token_id: int) -> FSMState: ...
 
-    def copy(self) -> "FSM":
-        ...
+    def copy(self) -> "FSM": ...
 
 
 class StopAtEosFSM(FSM):
@@ -88,6 +86,7 @@ class StopAtEosFSM(FSM):
         return self
 
 
+@functools.lru_cache(maxsize=1024)
 class RegexFSM(FSM):
     """FSM to generate text that is in the language of a regular expression."""
 
