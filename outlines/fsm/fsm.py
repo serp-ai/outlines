@@ -16,12 +16,8 @@ FSMState = NewType("FSMState", int)
 
 
 class FSM(Protocol):
-    first_state: FSMState = FSMState(0)
-    final_state: FSMState = FSMState(-1)
-
     def is_final_state(self, state: FSMState) -> bool:
-        """Determine whether the current state of the FSM is a final state."""
-        return state == self.final_state
+        ...
 
     def allowed_token_ids(self, state: FSMState) -> List[int]: ...
 
@@ -30,12 +26,14 @@ class FSM(Protocol):
     def copy(self) -> "FSM": ...
 
 
-class StopAtEosFSM(FSM):
+class StopAtEosFSM:
     """FSM to generate text until EOS has been generated."""
 
     def __init__(self, tokenizer: "Tokenizer"):
         self.eos_token_id = tokenizer.eos_token_id
         self.vocabulary = tokenizer.vocabulary.values()
+        self.start_state: FSMState = FSMState(0)
+        self.final_state: FSMState = FSMState(1)
 
     def allowed_token_ids(self, state: FSMState) -> List[int]:
         """Generate a list of allowed tokens for the next step.
@@ -76,10 +74,14 @@ class StopAtEosFSM(FSM):
         The new state of the FSM.
 
         """
-        if token_id == self.eos_token_id:
+        if token_id == self.eos_token_id or state == self.final_state:
             return self.final_state
 
-        return self.first_state
+        return self.start_state
+
+    def is_final_state(self, state: FSMState) -> bool:
+        """Determine whether the current state of the FSM is a final state."""
+        return state == self.final_state
 
     def copy(self) -> "StopAtEosFSM":
         """Create a copy of the FSM."""
@@ -94,7 +96,7 @@ class RegexFSM(FSM):
         @cache()
         def create_states_mapping(
             regex_string: str, cacheable_vocabulary: Tuple[Tuple[str, int], ...]
-        ) -> Tuple[dict, set]:
+        ) -> Tuple[dict, set, set]:
             """Create the variables related to the mapping between states and tokens
             The parameters of the function are used for caching purpose
             """
@@ -115,13 +117,19 @@ class RegexFSM(FSM):
                     "The vocabulary does not allow us to build a sequence that matches the input regex"
                 )
 
-            return states_to_token_maps, empty_token_ids
+            return states_to_token_maps, empty_token_ids, regex_fsm.finals
 
-        self.states_to_token_maps, self.empty_token_ids = create_states_mapping(
+        (
+            self.states_to_token_maps,
+            self.empty_token_ids,
+            fsm_finals,
+        ) = create_states_mapping(
             regex_string, tuple(sorted(tokenizer.vocabulary.items()))
         )
         self.vocabulary = list(tokenizer.vocabulary.values())
         self.eos_token_id = tokenizer.eos_token_id
+        self.start_state = FSMState(0)
+        self.final_states = fsm_finals | {-1}
 
     def allowed_token_ids(self, state: FSMState) -> List[int]:
         """Generate a list of allowed tokens for the next step.
@@ -172,12 +180,16 @@ class RegexFSM(FSM):
 
         """
         if token_id == self.eos_token_id:
-            return self.final_state
+            return FSMState(-1)
+        elif (
+            state in self.final_states
+        ):  # Necessary because we keep generating EOS tokens when finished
+            return state
 
         last_token_to_end_state = self.states_to_token_maps[state]
         next_state = last_token_to_end_state.get(token_id)
         if next_state is None:
-            return self.final_state
+            return FSMState(-1)
 
         return FSMState(next_state)
 
@@ -221,6 +233,9 @@ class RegexFSM(FSM):
         from_interegular_instance.eos_token_id = tokenizer.eos_token_id
         return from_interegular_instance
 
+    def is_final_state(self, state: FSMState) -> bool:
+        return state in self.final_states
+
     def copy(self) -> "RegexFSM":
         """Create a copy of the FSM."""
         return self
@@ -256,6 +271,9 @@ class CFGFSM(FSM):
         self.check_last = False
         self.proposal_last: List[int] = []
         self.regex_fsm_last: RegexFSM
+
+        self.start_state = FSMState(0)
+        self.final_state = FSMState(-1)
 
     def allowed_token_ids(self, state: FSMState) -> List[int]:
         """Generate a list of allowed tokens for the next step.
@@ -327,7 +345,7 @@ class CFGFSM(FSM):
         self.regex_fsm = RegexFSM(regex_string, self.tokenizer)
         self.reset_state = True
 
-        proposal += self.regex_fsm.allowed_token_ids(self.first_state)
+        proposal += self.regex_fsm.allowed_token_ids(self.start_state)
         if self.allow_eos:
             self.allow_eos = False
         else:
@@ -353,7 +371,10 @@ class CFGFSM(FSM):
         -------
         The new state of the FSM.
         """
-        if token_id == self.tokenizer.eos_token_id:
+
+        # We need to return the final state when in the final state because we
+        # then generate EOS tokens instead of stopping the generation.
+        if token_id == self.tokenizer.eos_token_id or state == self.final_state:
             return self.final_state
 
         self.generation += self.tokenizer.decode([token_id])[0]
@@ -365,9 +386,12 @@ class CFGFSM(FSM):
 
         if self.reset_state:
             self.reset_state = False
-            state = self.first_state
+            state = self.start_state
 
         return self.regex_fsm.next_state(state, token_id)
+
+    def is_final_state(self, state: FSMState) -> bool:
+        return state == self.final_state
 
     def copy(self) -> "CFGFSM":
         """Create a copy of the FSM."""

@@ -138,7 +138,7 @@ def to_regex(
         if any(is_required):
             last_required_pos = max([i for i, value in enumerate(is_required) if value])
             for i, (name, value) in enumerate(properties.items()):
-                subregex = f'{whitespace_pattern}"{name}"{whitespace_pattern}:{whitespace_pattern}'
+                subregex = f'{whitespace_pattern}"{re.escape(name)}"{whitespace_pattern}:{whitespace_pattern}'
                 subregex += to_regex(resolver, value, whitespace_pattern)
                 if i < last_required_pos:
                     subregex = f"{subregex}{whitespace_pattern},"
@@ -215,6 +215,14 @@ def to_regex(
                 choices.append(f'"{re.escape(choice)}"')
 
         return f"({'|'.join(choices)})"
+
+    elif "const" in instance:
+        const = instance["const"]
+        if type(const) in [int, float, bool, None]:
+            const = re.escape(str(const))
+        elif type(const) == str:
+            const = f'"{re.escape(const)}"'
+        return const
 
     elif "$ref" in instance:
         path = f"{instance['$ref']}"
